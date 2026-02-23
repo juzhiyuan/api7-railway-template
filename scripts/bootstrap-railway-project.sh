@@ -300,7 +300,9 @@ main() {
   ensure_service_from_repo "jaeger" "Dockerfile.jaeger"
 
   local database_ref
-  printf -v database_ref 'DATABASE_DSN=${{%s.DATABASE_URL}}' "$POSTGRES_SERVICE_NAME"
+  printf -v database_ref \
+    'DATABASE_DSN=postgres://${{%s.PGUSER}}:${{%s.PGPASSWORD}}@${{%s.PGHOST}}:${{%s.PGPORT}}/${{%s.PGDATABASE}}' \
+    "$POSTGRES_SERVICE_NAME" "$POSTGRES_SERVICE_NAME" "$POSTGRES_SERVICE_NAME" "$POSTGRES_SERVICE_NAME" "$POSTGRES_SERVICE_NAME"
 
   ensure_variables "dashboard" \
     "$database_ref" \

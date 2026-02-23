@@ -14,6 +14,13 @@ required_var DATABASE_DSN
 required_var PROMETHEUS_ADDR
 required_var JAEGER_COLLECTOR_ADDR
 
+# API7 expects "postgres://", but Railway DATABASE_URL commonly uses "postgresql://".
+case "${DATABASE_DSN}" in
+  postgresql://*)
+    DATABASE_DSN="postgres://${DATABASE_DSN#postgresql://}"
+    ;;
+esac
+
 DP_MANAGER_LOG_LEVEL="${DP_MANAGER_LOG_LEVEL:-warn}"
 DP_MANAGER_ACCESS_LOG="${DP_MANAGER_ACCESS_LOG:-stdout}"
 DP_MANAGER_HTTP_HOST="${DP_MANAGER_HTTP_HOST:-0.0.0.0}"
@@ -21,9 +28,11 @@ DP_MANAGER_HTTP_PORT="${DP_MANAGER_HTTP_PORT:-7900}"
 DP_MANAGER_TLS_HOST="${DP_MANAGER_TLS_HOST:-0.0.0.0}"
 DP_MANAGER_TLS_PORT="${DP_MANAGER_TLS_PORT:-7943}"
 
-mkdir -p /usr/local/api7/conf
+CONFIG_DIR="/tmp/api7/conf"
+CONFIG_FILE="$CONFIG_DIR/conf.yaml"
+mkdir -p "$CONFIG_DIR"
 
-cat > /usr/local/api7/conf/conf.yaml <<EOF_CONFIG
+cat > "$CONFIG_FILE" <<EOF_CONFIG
 server:
   listen:
     host: "${DP_MANAGER_HTTP_HOST}"
@@ -75,4 +84,4 @@ rate_limit:
   count: 1000
 EOF_CONFIG
 
-exec /usr/local/api7/api7-ee-dp-manager -c /usr/local/api7/conf/conf.yaml
+exec /usr/local/api7/api7-ee-dp-manager -c "$CONFIG_FILE"

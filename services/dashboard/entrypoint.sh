@@ -14,6 +14,13 @@ required_var DATABASE_DSN
 required_var PROMETHEUS_ADDR
 required_var JAEGER_ADDR
 
+# API7 expects "postgres://", but Railway DATABASE_URL commonly uses "postgresql://".
+case "${DATABASE_DSN}" in
+  postgresql://*)
+    DATABASE_DSN="postgres://${DATABASE_DSN#postgresql://}"
+    ;;
+esac
+
 DASHBOARD_LOG_LEVEL="${DASHBOARD_LOG_LEVEL:-warn}"
 DASHBOARD_ACCESS_LOG="${DASHBOARD_ACCESS_LOG:-stdout}"
 DASHBOARD_HTTP_DISABLE="${DASHBOARD_HTTP_DISABLE:-false}"
@@ -23,9 +30,11 @@ DASHBOARD_TLS_DISABLE="${DASHBOARD_TLS_DISABLE:-false}"
 DASHBOARD_TLS_HOST="${DASHBOARD_TLS_HOST:-0.0.0.0}"
 DASHBOARD_TLS_PORT="${DASHBOARD_TLS_PORT:-7443}"
 
-mkdir -p /usr/local/api7/conf
+CONFIG_DIR="/tmp/api7/conf"
+CONFIG_FILE="$CONFIG_DIR/conf.yaml"
+mkdir -p "$CONFIG_DIR"
 
-cat > /usr/local/api7/conf/conf.yaml <<EOF_CONFIG
+cat > "$CONFIG_FILE" <<EOF_CONFIG
 server:
   listen:
     disable: ${DASHBOARD_HTTP_DISABLE}
@@ -100,6 +109,13 @@ security:
     response_code: 403
 EOF_CONFIG
 
-cd /usr/local/api7
-node server.js &
-exec /usr/local/api7/api7-ee-dashboard -c /usr/local/api7/conf/conf.yaml
+if [ -f /app/apps/console/server.js ]; then
+  (
+    cd /app/apps/console
+    node server.js
+  ) &
+else
+  echo "WARN: dashboard console server.js not found at /app/apps/console/server.js" >&2
+fi
+
+exec /usr/local/api7/api7-ee-dashboard -c "$CONFIG_FILE"

@@ -75,12 +75,12 @@ Idempotency behavior:
 The script auto-resolves the PostgreSQL service reference. Default target is `Postgres`.
 
 `dashboard`:
-- `DATABASE_DSN=${{Postgres.DATABASE_URL}}`
+- `DATABASE_DSN=postgres://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`
 - `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`
 - `JAEGER_ADDR=http://jaeger.railway.internal:16686`
 
 `dp-manager`:
-- `DATABASE_DSN=${{Postgres.DATABASE_URL}}`
+- `DATABASE_DSN=postgres://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`
 - `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`
 - `JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318`
 
