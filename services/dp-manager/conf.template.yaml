@@ -1,0 +1,32 @@
+# This template is intentionally kept as reference for Railway operators.
+# The runtime config is rendered by entrypoint.sh from environment variables.
+server:
+  listen:
+    host: "${DP_MANAGER_HTTP_HOST}"
+    port: ${DP_MANAGER_HTTP_PORT}
+  tls:
+    host: "${DP_MANAGER_TLS_HOST}"
+    port: ${DP_MANAGER_TLS_PORT}
+  status:
+    disable: false
+    host: "127.0.0.1"
+    port: 7901
+  pprof:
+    enable: true
+    host: "127.0.0.1"
+    port: 6060
+
+log:
+  level: ${DP_MANAGER_LOG_LEVEL}
+  output: stderr
+  access_log: ${DP_MANAGER_ACCESS_LOG}
+
+database:
+  dsn: "${DATABASE_DSN}"
+
+prometheus:
+  addr: "${PROMETHEUS_ADDR}"
+  remote_write_path: "/api/v1/write"
+
+jaeger:
+  collector_addr: "${JAEGER_COLLECTOR_ADDR}"

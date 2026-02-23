@@ -1,0 +1,38 @@
+# This template is intentionally kept as reference for Railway operators.
+# The runtime config is rendered by entrypoint.sh from environment variables.
+server:
+  listen:
+    disable: ${DASHBOARD_HTTP_DISABLE}
+    host: "${DASHBOARD_HTTP_HOST}"
+    port: ${DASHBOARD_HTTP_PORT}
+  tls:
+    disable: ${DASHBOARD_TLS_DISABLE}
+    host: "${DASHBOARD_TLS_HOST}"
+    port: ${DASHBOARD_TLS_PORT}
+    key_file: ""
+    cert_file: ""
+  status:
+    disable: false
+    host: "127.0.0.1"
+    port: 7081
+  pprof:
+    enable: true
+    host: "127.0.0.1"
+    port: 6060
+
+log:
+  level: ${DASHBOARD_LOG_LEVEL}
+  output: stderr
+  access_log: ${DASHBOARD_ACCESS_LOG}
+
+database:
+  dsn: "${DATABASE_DSN}"
+  max_open_conns: 30
+  max_idle_time: 30s
+  timeout: 5s
+
+prometheus:
+  addr: "${PROMETHEUS_ADDR}"
+
+jaeger:
+  addr: "${JAEGER_ADDR}"
