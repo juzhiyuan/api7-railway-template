@@ -27,6 +27,7 @@ EOF
 
 PROJECT_NAME=""
 REPO_URL=""
+REPO_SLUG=""
 WORKSPACE=""
 PROMETHEUS_VOLUME_MOUNT_PATH="/opt/bitnami/prometheus/data"
 
@@ -76,13 +77,21 @@ fail() {
 }
 
 validate_repo_url() {
-  if [[ ! "$REPO_URL" =~ ^https?:// ]]; then
-    fail "--repo-url must be a valid http(s) URL."
+  if [[ "$REPO_URL" =~ ^https?://github\.com/([^/]+)/([^/]+)(\.git)?/?$ ]]; then
+    local org="${BASH_REMATCH[1]}"
+    local repo="${BASH_REMATCH[2]}"
+    repo="${repo%.git}"
+    REPO_SLUG="${org}/${repo}"
+    return 0
   fi
 
-  if [[ ! "$REPO_URL" =~ ^https?://github\.com/[^/]+/[^/]+(\.git)?/?$ ]]; then
-    fail "--repo-url must be a GitHub repository URL (for example: https://github.com/org/repo)."
+  if [[ "$REPO_URL" =~ ^[^/]+/[^/]+$ ]]; then
+    REPO_SLUG="$REPO_URL"
+    warn "--repo-url received repository slug '$REPO_SLUG'. Prefer https://github.com/<org>/<repo>."
+    return 0
   fi
+
+  fail "--repo-url must be a GitHub repository URL (https://github.com/<org>/<repo>) or <org>/<repo>."
 }
 
 if ! command -v railway >/dev/null 2>&1; then
@@ -147,15 +156,22 @@ ensure_postgres() {
 ensure_service_from_repo() {
   local service_name="$1"
   local dockerfile_path="$2"
+  local output
 
   if service_exists "$service_name"; then
     log "Reusing existing service: $service_name"
   else
-    railway add \
+    if output="$(railway add \
       --service "$service_name" \
-      --repo "$REPO_URL" \
-      --variables "RAILWAY_DOCKERFILE_PATH=$dockerfile_path" >/dev/null
-    log "Created service: $service_name"
+      --repo "$REPO_SLUG" \
+      --variables "RAILWAY_DOCKERFILE_PATH=$dockerfile_path" 2>&1)"; then
+      log "Created service: $service_name"
+    else
+      if printf '%s' "$output" | grep -qi 'repo not found'; then
+        fail "Railway cannot access GitHub repo '$REPO_SLUG'. Connect GitHub to Railway and grant repository access, then rerun."
+      fi
+      fail "Failed to create service '$service_name' from repo '$REPO_SLUG': $output"
+    fi
   fi
 
   railway variables --service "$service_name" --skip-deploys \

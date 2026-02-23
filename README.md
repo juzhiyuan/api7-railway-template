@@ -60,7 +60,7 @@ Path: `scripts/bootstrap-railway-project.sh`
 
 Arguments:
 - `--project <name>` required
-- `--repo-url <url>` required (GitHub URL)
+- `--repo-url <url>` required (GitHub URL; `org/repo` also accepted)
 - `--workspace <workspace>` optional
 
 Idempotency behavior:
@@ -107,6 +107,15 @@ Cause:
 
 Fix:
 - use `https://github.com/<org>/<repo>` (or `.git` suffix).
+
+### `repo not found`
+Cause:
+- Railway can only link repos visible to its connected GitHub integration, and expects repository identity as `org/repo`.
+
+Fix:
+1. Confirm the repository exists and is pushed.
+2. In Railway, connect/install GitHub integration for the workspace and grant access to this repo.
+3. Rerun bootstrap with the same URL. The script normalizes it to `org/repo` automatically.
 
 ## Security note
 API7 dashboard temporary credentials are `admin/admin` on first boot. Rotate immediately.
