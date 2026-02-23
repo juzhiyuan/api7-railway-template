@@ -78,11 +78,17 @@ The script auto-resolves the PostgreSQL service reference. Default target is `Po
 - `DATABASE_DSN=postgres://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`
 - `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`
 - `JAEGER_ADDR=http://jaeger.railway.internal:16686`
+- `PORT=7080`
+- `DASHBOARD_TLS_DISABLE=true`
 
 `dp-manager`:
 - `DATABASE_DSN=postgres://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.PGHOST}}:${{Postgres.PGPORT}}/${{Postgres.PGDATABASE}}`
 - `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`
 - `JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318`
+- `PORT=7900`
+
+Note:
+- Railway service domains terminate TLS at Railway edge. True TLS passthrough to DP-Manager native TLS port `7943` requires Railway TCP Proxy (not the default `*.up.railway.app` service domain).
 
 ## Troubleshooting
 ### `Railpack could not determine how to build the app`

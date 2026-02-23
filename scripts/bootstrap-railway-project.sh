@@ -307,12 +307,15 @@ main() {
   ensure_variables "dashboard" \
     "$database_ref" \
     'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
-    'JAEGER_ADDR=http://jaeger.railway.internal:16686'
+    'JAEGER_ADDR=http://jaeger.railway.internal:16686' \
+    'PORT=7080' \
+    'DASHBOARD_TLS_DISABLE=true'
 
   ensure_variables "dp-manager" \
     "$database_ref" \
     'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
-    'JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318'
+    'JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318' \
+    'PORT=7900'
 
   ensure_public_domain "dashboard" "7080"
   ensure_public_domain "dp-manager" "7943"

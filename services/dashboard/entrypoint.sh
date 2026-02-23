@@ -112,7 +112,7 @@ EOF_CONFIG
 if [ -f /app/apps/console/server.js ]; then
   (
     cd /app/apps/console
-    node server.js
+    PORT=3000 node server.js
   ) &
 else
   echo "WARN: dashboard console server.js not found at /app/apps/console/server.js" >&2
