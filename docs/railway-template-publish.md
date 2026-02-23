@@ -1,18 +1,31 @@
 # Publish This Repository as a Public Railway Template
 
+Before you start:
+- A plain "paste GitHub repo URL" action in Railway creates one service.
+- Multi-service one-click provisioning requires a published Railway Template, or automation via Railway CLI.
+
+Fast automation option (no manual per-service setup):
+```bash
+./scripts/bootstrap-railway-project.sh \
+  --project api7-control-plane \
+  --repo-url https://github.com/<you>/<repo>
+```
+
 ## 1. Push repository to GitHub
 1. Create a GitHub repository.
 2. Push this directory to the default branch.
 
-## 2. Create Railway project from the repository
+## 2. Create Railway project from one GitHub link
 1. In Railway, create a new project from the GitHub repository.
-2. Add four services from this repo, each with its own root directory:
-   - `services/dashboard`
-   - `services/dp-manager`
-   - `services/prometheus`
-   - `services/jaeger`
-   Name the services exactly: `dashboard`, `dp-manager`, `prometheus`, `jaeger`.
-3. Add a PostgreSQL plugin service.
+2. Add four services that all use the **same source repo URL**.
+3. Name services exactly: `dashboard`, `dp-manager`, `prometheus`, `jaeger`.
+4. For each service, set the matching Dockerfile path variable:
+   - `dashboard`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.dashboard`
+   - `dp-manager`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.dp-manager`
+   - `prometheus`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.prometheus`
+   - `jaeger`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.jaeger`
+5. Do not set per-service root directories.
+6. Add a PostgreSQL plugin service.
 
 ## 3. Configure service networking and variables
 All services must be in the same Railway environment.

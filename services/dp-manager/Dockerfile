@@ -1,8 +1,0 @@
-FROM docker.io/api7/api7-ee-dp-manager:v3.9.5
-
-COPY conf.template.yaml /opt/api7-template/conf.template.yaml
-COPY --chmod=755 entrypoint.sh /opt/api7-template/entrypoint.sh
-
-EXPOSE 7900 7943
-
-ENTRYPOINT ["/opt/api7-template/entrypoint.sh"]

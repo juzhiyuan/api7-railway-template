@@ -1,6 +1,13 @@
-# API7 Control Plane Railway Template (No Gateway)
+# API7 Control Plane Railway Template (Single GitHub Link, No Gateway)
 
-This repository provides a reusable Railway template layout for API7 control-plane services.
+This repository is designed so **all Railway services use the same GitHub repo URL**.
+You do not need per-service root directories.
+
+Important Railway behavior:
+- Pasting a plain GitHub repo URL into Railway creates one service by default.
+- To provision the full stack in one operation, use either:
+  - A published Railway Template link, or
+  - The bootstrap script in this repo.
 
 Included services:
 - API7 Dashboard (`api7-ee-3-integrated:v3.9.5`)
@@ -12,20 +19,47 @@ Included services:
 Not included:
 - API7 Gateway service (manual deployment after template instantiation)
 
-## Service directories
+## Single-link deployment model
+For each Railway service, use the **same source repository URL** and set a different `RAILWAY_DOCKERFILE_PATH`:
+
+| Railway service name | `RAILWAY_DOCKERFILE_PATH` |
+| --- | --- |
+| `dashboard` | `Dockerfile.dashboard` |
+| `dp-manager` | `Dockerfile.dp-manager` |
+| `prometheus` | `Dockerfile.prometheus` |
+| `jaeger` | `Dockerfile.jaeger` |
+
+Internal config/entrypoint assets are stored under:
 - `services/dashboard`
 - `services/dp-manager`
-- `services/prometheus`
-- `services/jaeger`
-
-## Railway deployment model
-1. Create one Railway service per directory above.
-2. Name the services exactly: `dashboard`, `dp-manager`, `prometheus`, `jaeger`.
-3. Add a Railway PostgreSQL plugin to the same project/environment.
-4. Set variables described below.
-5. Expose only Dashboard and DP Manager publicly.
 
 Detailed steps: `docs/railway-template-publish.md`
+
+## One-command project bootstrap
+If you want to avoid creating four services manually, use:
+
+```bash
+./scripts/bootstrap-railway-project.sh \
+  --project api7-control-plane \
+  --repo-url https://github.com/<you>/<repo>
+```
+
+Optional:
+
+```bash
+./scripts/bootstrap-railway-project.sh \
+  --project api7-control-plane \
+  --repo-url https://github.com/<you>/<repo> \
+  --workspace <workspace-id-or-name>
+```
+
+What it does:
+- Creates a new Railway project
+- Adds Postgres plugin
+- Adds `dashboard`, `dp-manager`, `prometheus`, `jaeger` from the same repo URL
+- Sets required cross-service env vars
+- Creates public domains for dashboard/dp-manager
+- Attaches a Prometheus volume at `/opt/bitnami/prometheus/data`
 
 ## Required environment variables
 
