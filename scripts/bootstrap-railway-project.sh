@@ -20,13 +20,15 @@ Examples:
 
 Requirements:
   - railway CLI installed and authenticated (railway login)
-  - fresh/unlinked directory recommended
+  - canonical service names are enforced:
+    Postgres, dashboard, dp-manager, prometheus, jaeger
 EOF
 }
 
 PROJECT_NAME=""
 REPO_URL=""
 WORKSPACE=""
+PROMETHEUS_VOLUME_MOUNT_PATH="/opt/bitnami/prometheus/data"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,67 +62,197 @@ if [[ -z "$PROJECT_NAME" || -z "$REPO_URL" ]]; then
   exit 1
 fi
 
-if ! command -v railway >/dev/null 2>&1; then
-  echo "railway CLI is required. Install it first." >&2
-  exit 1
-fi
+log() {
+  printf '[INFO] %s\n' "$*"
+}
 
-if ! railway whoami >/dev/null 2>&1; then
-  echo "Not authenticated. Run: railway login" >&2
-  exit 1
-fi
+warn() {
+  printf '[WARN] %s\n' "$*" >&2
+}
 
-init_project() {
-  if [[ -n "$WORKSPACE" ]]; then
-    railway init --name "$PROJECT_NAME" --workspace "$WORKSPACE"
-  else
-    railway init --name "$PROJECT_NAME"
+fail() {
+  printf '[ERROR] %s\n' "$*" >&2
+  exit 1
+}
+
+validate_repo_url() {
+  if [[ ! "$REPO_URL" =~ ^https?:// ]]; then
+    fail "--repo-url must be a valid http(s) URL."
+  fi
+
+  if [[ ! "$REPO_URL" =~ ^https?://github\.com/[^/]+/[^/]+(\.git)?/?$ ]]; then
+    fail "--repo-url must be a GitHub repository URL (for example: https://github.com/org/repo)."
   fi
 }
 
-add_repo_service() {
+if ! command -v railway >/dev/null 2>&1; then
+  fail "railway CLI is required. Install it first."
+fi
+
+validate_repo_url
+
+if ! railway whoami >/dev/null 2>&1; then
+  fail "Not authenticated. Run: railway login"
+fi
+
+ensure_project() {
+  local link_args=("--project" "$PROJECT_NAME")
+  if [[ -n "$WORKSPACE" ]]; then
+    link_args+=("--workspace" "$WORKSPACE")
+  fi
+
+  local output
+
+  if output="$(railway link "${link_args[@]}" 2>&1)"; then
+    log "Linked existing Railway project: $PROJECT_NAME"
+    return 0
+  fi
+
+  local init_args=("--name" "$PROJECT_NAME")
+  if [[ -n "$WORKSPACE" ]]; then
+    init_args+=("--workspace" "$WORKSPACE")
+  fi
+
+  if output="$(railway init "${init_args[@]}" 2>&1)"; then
+    log "Created and linked Railway project: $PROJECT_NAME"
+    return 0
+  fi
+
+  fail "Could not link or create Railway project '$PROJECT_NAME'. Last error: $output"
+}
+
+service_exists() {
+  local service_name="$1"
+  railway variables --service "$service_name" --json >/dev/null 2>&1
+}
+
+ensure_postgres() {
+  if service_exists "Postgres"; then
+    log "Reusing existing Postgres service."
+    return 0
+  fi
+
+  if railway add --database postgres --service Postgres >/dev/null 2>&1; then
+    log "Created Postgres service."
+  else
+    warn "Could not create named Postgres service directly, retrying with default database add."
+    railway add --database postgres >/dev/null
+  fi
+
+  if ! service_exists "Postgres"; then
+    fail "Postgres service must be named exactly 'Postgres' for variable references. Rename it and rerun."
+  fi
+}
+
+ensure_service_from_repo() {
   local service_name="$1"
   local dockerfile_path="$2"
 
-  railway add \
-    --service "$service_name" \
-    --repo "$REPO_URL" \
-    --variables "RAILWAY_DOCKERFILE_PATH=$dockerfile_path"
+  if service_exists "$service_name"; then
+    log "Reusing existing service: $service_name"
+  else
+    railway add \
+      --service "$service_name" \
+      --repo "$REPO_URL" \
+      --variables "RAILWAY_DOCKERFILE_PATH=$dockerfile_path" >/dev/null
+    log "Created service: $service_name"
+  fi
+
+  railway variables --service "$service_name" --skip-deploys \
+    --set "RAILWAY_DOCKERFILE_PATH=$dockerfile_path" >/dev/null
 }
 
-echo "Creating Railway project: $PROJECT_NAME"
-init_project
+ensure_variables() {
+  local service_name="$1"
+  shift
 
-echo "Adding PostgreSQL plugin service"
-railway add --database postgres
+  local args=("--service" "$service_name" "--skip-deploys")
+  local kv
+  for kv in "$@"; do
+    args+=("--set" "$kv")
+  done
+  railway variables "${args[@]}" >/dev/null
+  log "Applied variables for service: $service_name"
+}
 
-echo "Adding application services from one repo URL"
-add_repo_service dashboard Dockerfile.dashboard
-add_repo_service dp-manager Dockerfile.dp-manager
-add_repo_service prometheus Dockerfile.prometheus
-add_repo_service jaeger Dockerfile.jaeger
+ensure_public_domain() {
+  local service_name="$1"
+  local port="$2"
+  local existing
+  local output
 
-echo "Configuring service variables"
-railway variables --service dashboard --skip-deploys \
-  --set 'DATABASE_DSN=${{Postgres.DATABASE_URL}}' \
-  --set 'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
-  --set 'JAEGER_ADDR=http://jaeger.railway.internal:16686'
+  if existing="$(railway domain --service "$service_name" --json 2>/dev/null)"; then
+    if printf '%s' "$existing" | grep -Eq "\"port\"[[:space:]]*:[[:space:]]*$port"; then
+      log "Public domain already exists for $service_name on port $port."
+      return 0
+    fi
+  fi
 
-railway variables --service dp-manager --skip-deploys \
-  --set 'DATABASE_DSN=${{Postgres.DATABASE_URL}}' \
-  --set 'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
-  --set 'JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318'
+  if output="$(railway domain --service "$service_name" --port "$port" --json 2>&1)"; then
+    log "Ensured public domain for $service_name on port $port."
+    return 0
+  fi
 
-echo "Generating public domains"
-railway domain --service dashboard --port 7080
-railway domain --service dp-manager --port 7943
+  if printf '%s' "$output" | grep -Eqi 'already|maximum|exists|one railway provided domain'; then
+    warn "Domain already exists for $service_name. Reusing existing domain."
+    return 0
+  fi
 
-echo "Attaching Prometheus persistent volume"
-railway service prometheus
-railway volume add --mount-path /opt/bitnami/prometheus/data
+  fail "Failed to ensure domain for $service_name: $output"
+}
 
-echo
-echo "Bootstrap complete."
-echo "Project: $PROJECT_NAME"
-echo "Services: dashboard, dp-manager, prometheus, jaeger, Postgres"
-echo "Next: open Railway dashboard and verify deployments/health."
+ensure_prometheus_volume() {
+  local output
+
+  railway service prometheus >/dev/null
+
+  if output="$(railway volume list 2>&1)"; then
+    if printf '%s' "$output" | grep -Fq "$PROMETHEUS_VOLUME_MOUNT_PATH"; then
+      log "Prometheus volume already mounted at $PROMETHEUS_VOLUME_MOUNT_PATH."
+      return 0
+    fi
+  fi
+
+  if output="$(railway volume add --mount-path "$PROMETHEUS_VOLUME_MOUNT_PATH" 2>&1)"; then
+    log "Attached Prometheus volume at $PROMETHEUS_VOLUME_MOUNT_PATH."
+    return 0
+  fi
+
+  if printf '%s' "$output" | grep -Eqi 'already|exists|attached|mount path'; then
+    warn "Prometheus volume appears to already exist/attach. Treating as success."
+    return 0
+  fi
+
+  fail "Failed to ensure Prometheus volume: $output"
+}
+
+main() {
+  ensure_project
+  ensure_postgres
+
+  ensure_service_from_repo "dashboard" "Dockerfile.dashboard"
+  ensure_service_from_repo "dp-manager" "Dockerfile.dp-manager"
+  ensure_service_from_repo "prometheus" "Dockerfile.prometheus"
+  ensure_service_from_repo "jaeger" "Dockerfile.jaeger"
+
+  ensure_variables "dashboard" \
+    'DATABASE_DSN=${{Postgres.DATABASE_URL}}' \
+    'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
+    'JAEGER_ADDR=http://jaeger.railway.internal:16686'
+
+  ensure_variables "dp-manager" \
+    'DATABASE_DSN=${{Postgres.DATABASE_URL}}' \
+    'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
+    'JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318'
+
+  ensure_public_domain "dashboard" "7080"
+  ensure_public_domain "dp-manager" "7943"
+  ensure_prometheus_volume
+
+  echo
+  log "Bootstrap complete."
+  log "Project: $PROJECT_NAME"
+  log "Services: dashboard, dp-manager, prometheus, jaeger, Postgres"
+}
+
+main "$@"

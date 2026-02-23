@@ -1,51 +1,53 @@
-# API7 Control Plane Railway Template (Single GitHub Link, No Gateway)
+# API7 Control Plane on Railway (Bootstrap-First)
 
-This repository is designed so **all Railway services use the same GitHub repo URL**.
-You do not need per-service root directories.
+This repo is the **single source** for all API7 control-plane services on Railway.
 
-Important Railway behavior:
-- Pasting a plain GitHub repo URL into Railway creates one service by default.
-- To provision the full stack in one operation, use either:
-  - A published Railway Template link, or
-  - The bootstrap script in this repo.
+## Why bootstrap-first
+A plain Railway "Deploy from GitHub repo" action creates one service and runs Railpack auto-detection. With this repo layout, that commonly fails with:
 
-Included services:
-- API7 Dashboard (`api7-ee-3-integrated:v3.9.5`)
-- API7 DP Manager (`api7-ee-dp-manager:v3.9.5`)
-- Prometheus (`api7/prometheus:2.48.1-debian-11-r0`)
-- Jaeger (`jaeger:2.14.0`)
-- Railway PostgreSQL plugin
+```text
+⚠ Script start.sh not found
+✖ Railpack could not determine how to build the app.
+```
+
+That is expected. Railway plain repo flow is single-service, while this stack needs multiple services.
+
+Use this repo with the bootstrap script instead:
+- one repo URL
+- one command
+- all required services created or reconciled idempotently
+
+## What gets provisioned
+- `dashboard` (public on `7080`)
+- `dp-manager` (public on `7943`)
+- `prometheus` (private)
+- `jaeger` (private)
+- `Postgres` (Railway PostgreSQL plugin, private)
 
 Not included:
-- API7 Gateway service (manual deployment after template instantiation)
+- API7 gateway service (manual post-deploy step)
 
-## Single-link deployment model
-For each Railway service, use the **same source repository URL** and set a different `RAILWAY_DOCKERFILE_PATH`:
+## Dockerfile routing model (same GitHub link for all services)
+Every Railway service points to the **same GitHub repository URL** and uses `RAILWAY_DOCKERFILE_PATH` to select its build target:
 
-| Railway service name | `RAILWAY_DOCKERFILE_PATH` |
-| --- | --- |
-| `dashboard` | `Dockerfile.dashboard` |
-| `dp-manager` | `Dockerfile.dp-manager` |
-| `prometheus` | `Dockerfile.prometheus` |
-| `jaeger` | `Dockerfile.jaeger` |
+- `dashboard` -> `Dockerfile.dashboard`
+- `dp-manager` -> `Dockerfile.dp-manager`
+- `prometheus` -> `Dockerfile.prometheus`
+- `jaeger` -> `Dockerfile.jaeger`
 
-Internal config/entrypoint assets are stored under:
-- `services/dashboard`
-- `services/dp-manager`
+## Prerequisites
+- `railway` CLI installed
+- `railway login` completed
+- repository pushed to GitHub
 
-Detailed steps: `docs/railway-template-publish.md`
-
-## One-command project bootstrap
-If you want to avoid creating four services manually, use:
-
+## Quickstart
 ```bash
 ./scripts/bootstrap-railway-project.sh \
   --project api7-control-plane \
   --repo-url https://github.com/<you>/<repo>
 ```
 
-Optional:
-
+Optional workspace targeting:
 ```bash
 ./scripts/bootstrap-railway-project.sh \
   --project api7-control-plane \
@@ -53,63 +55,62 @@ Optional:
   --workspace <workspace-id-or-name>
 ```
 
-What it does:
-- Creates a new Railway project
-- Adds Postgres plugin
-- Adds `dashboard`, `dp-manager`, `prometheus`, `jaeger` from the same repo URL
-- Sets required cross-service env vars
-- Creates public domains for dashboard/dp-manager
-- Attaches a Prometheus volume at `/opt/bitnami/prometheus/data`
+## Script contract
+Path: `scripts/bootstrap-railway-project.sh`
 
-## Required environment variables
+Arguments:
+- `--project <name>` required
+- `--repo-url <url>` required (GitHub URL)
+- `--workspace <workspace>` optional
 
-### Dashboard service
-- `DATABASE_DSN` (from Postgres plugin)
-- `PROMETHEUS_ADDR` (recommended: `http://prometheus.railway.internal:9090`)
-- `JAEGER_ADDR` (recommended: `http://jaeger.railway.internal:16686`)
-When using Railway variable references, match the namespace to your PostgreSQL service name (example: `${{Postgres.DATABASE_URL}}`).
+Idempotency behavior:
+- creates or links project
+- creates or reuses `Postgres`, `dashboard`, `dp-manager`, `prometheus`, `jaeger`
+- reapplies required variables on rerun
+- ensures dashboard/dp-manager public domains
+- ensures Prometheus volume mount at `/opt/bitnami/prometheus/data`
 
-Optional Dashboard variables:
-- `DASHBOARD_LOG_LEVEL` default: `warn`
-- `DASHBOARD_ACCESS_LOG` default: `stdout`
-- `DASHBOARD_HTTP_DISABLE` default: `false`
-- `DASHBOARD_HTTP_HOST` default: `0.0.0.0`
-- `DASHBOARD_HTTP_PORT` default: `7080`
-- `DASHBOARD_TLS_DISABLE` default: `false`
-- `DASHBOARD_TLS_HOST` default: `0.0.0.0`
-- `DASHBOARD_TLS_PORT` default: `7443`
+## Required variable wiring
+`dashboard`:
+- `DATABASE_DSN=${{Postgres.DATABASE_URL}}`
+- `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`
+- `JAEGER_ADDR=http://jaeger.railway.internal:16686`
 
-### DP Manager service
-- `DATABASE_DSN` (from Postgres plugin)
-- `PROMETHEUS_ADDR` (recommended: `http://prometheus.railway.internal:9090`)
-- `JAEGER_COLLECTOR_ADDR` (recommended: `http://jaeger.railway.internal:4318`)
+`dp-manager`:
+- `DATABASE_DSN=${{Postgres.DATABASE_URL}}`
+- `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`
+- `JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318`
 
-Optional DP Manager variables:
-- `DP_MANAGER_LOG_LEVEL` default: `warn`
-- `DP_MANAGER_ACCESS_LOG` default: `stdout`
-- `DP_MANAGER_HTTP_HOST` default: `0.0.0.0`
-- `DP_MANAGER_HTTP_PORT` default: `7900`
-- `DP_MANAGER_TLS_HOST` default: `0.0.0.0`
-- `DP_MANAGER_TLS_PORT` default: `7943`
+## Troubleshooting
+### `Railpack could not determine how to build the app`
+Cause:
+- you created a plain single-service project directly from repo URL, so Railway tried Railpack detection.
 
-## Public exposure contract
-- Dashboard public endpoint: port `7080` (Railway TLS edge)
-- DP Manager public endpoint: port `7943` (service-native TLS)
-- Prometheus: private only
-- Jaeger: private only
+Fix:
+1. Keep using the same GitHub repo URL.
+2. Run the bootstrap command above.
+3. Let the script create all services and set `RAILWAY_DOCKERFILE_PATH` per service.
 
-## Prometheus persistence
-Attach a Railway volume to the Prometheus service mount path:
-- `/opt/bitnami/prometheus/data`
+### `Unauthorized. Please login with railway login`
+Cause:
+- Railway CLI is not authenticated.
 
-## Default API7 temporary credentials
-The API7 control plane starts with temporary credentials:
-- username: `admin`
-- password: `admin`
+Fix:
+```bash
+railway login
+```
+Then rerun bootstrap.
 
-Rotate credentials immediately after first login.
+### `--repo-url must be a GitHub repository URL`
+Cause:
+- repo URL is malformed or not a GitHub repository path.
 
-## Manual gateway deployment
-This template intentionally excludes the default gateway.
+Fix:
+- use `https://github.com/<org>/<repo>` (or `.git` suffix).
 
-After Dashboard and DP Manager are healthy, deploy gateway manually via API7 Dashboard deployment workflow so each fresh project can choose its own gateway runtime settings.
+## Security note
+API7 dashboard temporary credentials are `admin/admin` on first boot. Rotate immediately.
+
+## Optional: publish as a real Railway template
+Bootstrap is the primary supported workflow. If you also want a public template entry in Railway UI, follow:
+- `docs/railway-template-publish.md`
