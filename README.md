@@ -37,6 +37,7 @@ Every Railway service points to the **same GitHub repository URL** and uses `RAI
 
 ## Prerequisites
 - `railway` CLI installed
+- `jq` installed
 - `railway login` completed
 - repository pushed to GitHub
 
@@ -71,6 +72,8 @@ Idempotency behavior:
 - ensures Prometheus volume mount at `/opt/bitnami/prometheus/data`
 
 ## Required variable wiring
+The script auto-resolves the PostgreSQL service reference. Default target is `Postgres`.
+
 `dashboard`:
 - `DATABASE_DSN=${{Postgres.DATABASE_URL}}`
 - `PROMETHEUS_ADDR=http://prometheus.railway.internal:9090`

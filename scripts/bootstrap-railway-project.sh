@@ -20,8 +20,9 @@ Examples:
 
 Requirements:
   - railway CLI installed and authenticated (railway login)
-  - canonical service names are enforced:
-    Postgres, dashboard, dp-manager, prometheus, jaeger
+  - canonical app service names are enforced:
+    dashboard, dp-manager, prometheus, jaeger
+  - Postgres service defaults to Postgres; script auto-detects if renamed
 EOF
 }
 
@@ -30,6 +31,7 @@ REPO_URL=""
 REPO_SLUG=""
 WORKSPACE=""
 PROMETHEUS_VOLUME_MOUNT_PATH="/opt/bitnami/prometheus/data"
+POSTGRES_SERVICE_NAME="Postgres"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -98,6 +100,10 @@ if ! command -v railway >/dev/null 2>&1; then
   fail "railway CLI is required. Install it first."
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+  fail "jq is required. Install it first."
+fi
+
 validate_repo_url
 
 if ! railway whoami >/dev/null 2>&1; then
@@ -105,6 +111,14 @@ if ! railway whoami >/dev/null 2>&1; then
 fi
 
 ensure_project() {
+  local current_project_name=""
+  if current_project_name="$(railway status --json 2>/dev/null | jq -r '.name // empty' 2>/dev/null)" \
+    && [[ -n "$current_project_name" ]] \
+    && [[ "$current_project_name" == "$PROJECT_NAME" ]]; then
+    log "Using currently linked Railway project: $PROJECT_NAME"
+    return 0
+  fi
+
   local link_args=("--project" "$PROJECT_NAME")
   if [[ -n "$WORKSPACE" ]]; then
     link_args+=("--workspace" "$WORKSPACE")
@@ -137,6 +151,7 @@ service_exists() {
 
 ensure_postgres() {
   if service_exists "Postgres"; then
+    POSTGRES_SERVICE_NAME="Postgres"
     log "Reusing existing Postgres service."
     return 0
   fi
@@ -148,9 +163,42 @@ ensure_postgres() {
     railway add --database postgres >/dev/null
   fi
 
-  if ! service_exists "Postgres"; then
-    fail "Postgres service must be named exactly 'Postgres' for variable references. Rename it and rerun."
+  local attempts=0
+  while [[ $attempts -lt 10 ]]; do
+    if service_exists "Postgres"; then
+      POSTGRES_SERVICE_NAME="Postgres"
+      log "Detected Postgres service after create."
+      return 0
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+
+  local postgres_candidates
+  postgres_candidates="$(
+    railway status --json \
+      | jq -r '.services.edges[].node
+          | .name as $name
+          | (.serviceInstances.edges[0].node.source.image // "") as $image
+          | select(($name | test("postgres"; "i")) or ($image | test("postgres"; "i")))
+          | $name' \
+      | sort -u
+  )"
+
+  local candidate_count
+  candidate_count="$(printf '%s\n' "$postgres_candidates" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+  if [[ "$candidate_count" -eq 1 ]]; then
+    POSTGRES_SERVICE_NAME="$(printf '%s\n' "$postgres_candidates" | sed '/^$/d')"
+    warn "Using detected PostgreSQL service name '$POSTGRES_SERVICE_NAME' (default is 'Postgres')."
+    return 0
   fi
+
+  if [[ "$candidate_count" -gt 1 ]]; then
+    fail "Multiple PostgreSQL-like services detected (${postgres_candidates//$'\n'/, }). Keep one database service or rename to 'Postgres', then rerun."
+  fi
+
+  fail "Could not detect PostgreSQL service after creation. Check Railway services and rerun."
 }
 
 ensure_service_from_repo() {
@@ -251,13 +299,16 @@ main() {
   ensure_service_from_repo "prometheus" "Dockerfile.prometheus"
   ensure_service_from_repo "jaeger" "Dockerfile.jaeger"
 
+  local database_ref
+  printf -v database_ref 'DATABASE_DSN=${{%s.DATABASE_URL}}' "$POSTGRES_SERVICE_NAME"
+
   ensure_variables "dashboard" \
-    'DATABASE_DSN=${{Postgres.DATABASE_URL}}' \
+    "$database_ref" \
     'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
     'JAEGER_ADDR=http://jaeger.railway.internal:16686'
 
   ensure_variables "dp-manager" \
-    'DATABASE_DSN=${{Postgres.DATABASE_URL}}' \
+    "$database_ref" \
     'PROMETHEUS_ADDR=http://prometheus.railway.internal:9090' \
     'JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318'
 
@@ -268,7 +319,7 @@ main() {
   echo
   log "Bootstrap complete."
   log "Project: $PROJECT_NAME"
-  log "Services: dashboard, dp-manager, prometheus, jaeger, Postgres"
+  log "Services: dashboard, dp-manager, prometheus, jaeger, $POSTGRES_SERVICE_NAME"
 }
 
 main "$@"
