@@ -19,7 +19,7 @@ Use this repo with the bootstrap script instead:
 
 ## What gets provisioned
 - `dashboard` (public on `7080`)
-- `dp-manager` (public on `7943`)
+- `dp-manager` (native TLS on `7943` via Railway TCP Proxy)
 - `prometheus` (private)
 - `jaeger` (private)
 - `Postgres` (Railway PostgreSQL plugin, private)
@@ -38,6 +38,7 @@ Every Railway service points to the **same GitHub repository URL** and uses `RAI
 ## Prerequisites
 - `railway` CLI installed
 - `jq` installed
+- `curl` installed
 - `railway login` completed
 - repository pushed to GitHub
 
@@ -68,7 +69,9 @@ Idempotency behavior:
 - creates or links project
 - creates or reuses `Postgres`, `dashboard`, `dp-manager`, `prometheus`, `jaeger`
 - reapplies required variables on rerun
-- ensures dashboard/dp-manager public domains
+- ensures dashboard public domain
+- ensures `dp-manager` Railway TCP proxy to app port `7943`
+- forces deterministic startup order (`dashboard` redeploy, then `dp-manager`) to avoid fresh-project migration race
 - ensures Prometheus volume mount at `/opt/bitnami/prometheus/data`
 
 ## Required variable wiring
@@ -88,7 +91,8 @@ The script auto-resolves the PostgreSQL service reference. Default target is `Po
 - `PORT=7900`
 
 Note:
-- Railway service domains terminate TLS at Railway edge. True TLS passthrough to DP-Manager native TLS port `7943` requires Railway TCP Proxy (not the default `*.up.railway.app` service domain).
+- Railway service domains terminate TLS at Railway edge.
+- For true TLS passthrough to DP-Manager native TLS port `7943`, use the script-provisioned Railway TCP proxy endpoint from `RAILWAY_TCP_PROXY_DOMAIN` and `RAILWAY_TCP_PROXY_PORT`.
 
 ## Troubleshooting
 ### `Railpack could not determine how to build the app`
@@ -125,6 +129,15 @@ Fix:
 1. Confirm the repository exists and is pushed.
 2. In Railway, connect/install GitHub integration for the workspace and grant access to this repo.
 3. Rerun bootstrap with the same URL. The script normalizes it to `org/repo` automatically.
+
+### `Client sent an HTTP request to an HTTPS server` on DP-Manager service domain
+Cause:
+- `dp-manager` native TLS listens on `7943`, but Railway `*.up.railway.app` domains are edge-terminated and not TLS passthrough.
+
+Fix:
+- Use the TCP proxy endpoint printed in Railway variables:
+  - `RAILWAY_TCP_PROXY_DOMAIN`
+  - `RAILWAY_TCP_PROXY_PORT`
 
 ## Security note
 API7 dashboard temporary credentials are `admin/admin` on first boot. Rotate immediately.

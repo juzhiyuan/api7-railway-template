@@ -32,6 +32,8 @@ REPO_SLUG=""
 WORKSPACE=""
 PROMETHEUS_VOLUME_MOUNT_PATH="/opt/bitnami/prometheus/data"
 POSTGRES_SERVICE_NAME="Postgres"
+DP_MANAGER_TLS_APP_PORT="7943"
+RAILWAY_GRAPHQL_ENDPOINT="https://backboard.railway.app/graphql/v2"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,6 +104,10 @@ fi
 
 if ! command -v jq >/dev/null 2>&1; then
   fail "jq is required. Install it first."
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+  fail "curl is required. Install it first."
 fi
 
 validate_repo_url
@@ -239,6 +245,179 @@ ensure_variables() {
   log "Applied variables for service: $service_name"
 }
 
+service_id_by_name() {
+  local service_name="$1"
+  railway status --json \
+    | jq -r --arg service_name "$service_name" \
+      '.services.edges[] | select(.node.name == $service_name) | .node.id' \
+    | head -n 1
+}
+
+environment_id() {
+  railway status --json | jq -r '.environments.edges[0].node.id'
+}
+
+service_deploy_status() {
+  local service_name="$1"
+  railway status --json \
+    | jq -r --arg service_name "$service_name" \
+      '.services.edges[]
+       | select(.node.name == $service_name)
+       | .node.serviceInstances.edges[0].node.latestDeployment.status // empty' \
+    | head -n 1
+}
+
+wait_for_service_success() {
+  local service_name="$1"
+  local timeout_seconds="${2:-900}"
+  local poll_interval_seconds=5
+  local start_ts now_ts elapsed status
+
+  start_ts="$(date +%s)"
+
+  while true; do
+    status="$(service_deploy_status "$service_name")"
+
+    if [[ -z "$status" ]]; then
+      fail "Could not determine deployment status for service '$service_name'."
+    fi
+
+    case "$status" in
+      SUCCESS)
+        log "Service '$service_name' deployment is SUCCESS."
+        return 0
+        ;;
+      CRASHED|FAILED|CANCELED|REMOVED)
+        fail "Service '$service_name' deployment ended with status '$status'. Check: railway logs --service $service_name"
+        ;;
+      *)
+        ;;
+    esac
+
+    now_ts="$(date +%s)"
+    elapsed="$((now_ts - start_ts))"
+    if (( elapsed >= timeout_seconds )); then
+      fail "Timed out waiting for service '$service_name' to reach SUCCESS (last status: $status)."
+    fi
+
+    sleep "$poll_interval_seconds"
+  done
+}
+
+redeploy_and_wait() {
+  local service_name="$1"
+  railway redeploy --service "$service_name" --yes >/dev/null
+  log "Triggered redeploy for service '$service_name'."
+  wait_for_service_success "$service_name"
+}
+
+railway_api_token() {
+  jq -r '.user.token // empty' "$HOME/.railway/config.json" 2>/dev/null
+}
+
+railway_graphql() {
+  local query="$1"
+  local variables_json="$2"
+  local token payload
+
+  token="$(railway_api_token)"
+  [[ -n "$token" ]] || fail "Could not read Railway API token from ~/.railway/config.json. Run: railway login"
+
+  payload="$(jq -n --arg query "$query" --argjson variables "$variables_json" '{query: $query, variables: $variables}')"
+
+  curl -sS "$RAILWAY_GRAPHQL_ENDPOINT" \
+    -H "Authorization: Bearer $token" \
+    -H 'Content-Type: application/json' \
+    --data "$payload"
+}
+
+ensure_tcp_proxy() {
+  local service_name="$1"
+  local app_port="$2"
+  local service_id env_id
+  local query mutation query_vars mutation_vars response
+  local proxy_id proxy_domain proxy_port proxy_status
+  local attempts=0
+
+  service_id="$(service_id_by_name "$service_name")"
+  [[ -n "$service_id" ]] || fail "Could not find service ID for '$service_name'."
+
+  env_id="$(environment_id)"
+  [[ -n "$env_id" ]] || fail "Could not determine Railway environment ID."
+
+  query='query($sid:String!,$eid:String!){ tcpProxies(serviceId:$sid, environmentId:$eid){ id domain proxyPort applicationPort syncStatus } }'
+  query_vars="$(jq -n --arg sid "$service_id" --arg eid "$env_id" '{sid: $sid, eid: $eid}')"
+
+  response="$(railway_graphql "$query" "$query_vars")"
+  if [[ "$(printf '%s' "$response" | jq '.errors | length // 0')" != "0" ]]; then
+    fail "Failed to query Railway TCP proxy state for '$service_name'. Response: $response"
+  fi
+
+  proxy_id="$(
+    printf '%s' "$response" \
+      | jq -r --argjson app_port "$app_port" '.data.tcpProxies[]? | select(.applicationPort == $app_port) | .id' \
+      | head -n 1
+  )"
+
+  if [[ -z "$proxy_id" ]]; then
+    mutation='mutation($input:TCPProxyCreateInput!){ tcpProxyCreate(input:$input){ id domain proxyPort applicationPort syncStatus } }'
+    mutation_vars="$(
+      jq -n \
+        --arg service_id "$service_id" \
+        --arg env_id "$env_id" \
+        --argjson app_port "$app_port" \
+        '{input: {serviceId: $service_id, environmentId: $env_id, applicationPort: $app_port}}'
+    )"
+    response="$(railway_graphql "$mutation" "$mutation_vars")"
+
+    if [[ "$(printf '%s' "$response" | jq '.errors | length // 0')" != "0" ]]; then
+      if printf '%s' "$response" | grep -Eqi 'already|exists'; then
+        warn "TCP proxy likely already exists for '$service_name' on app port $app_port. Reusing existing proxy."
+      else
+        fail "Failed to create Railway TCP proxy for '$service_name' on app port $app_port. Response: $response"
+      fi
+    else
+      log "Requested Railway TCP proxy for '$service_name' on app port $app_port."
+    fi
+  else
+    log "Found existing Railway TCP proxy for '$service_name' on app port $app_port."
+  fi
+
+  while (( attempts < 30 )); do
+    attempts=$((attempts + 1))
+    response="$(railway_graphql "$query" "$query_vars")"
+    proxy_id="$(
+      printf '%s' "$response" \
+        | jq -r --argjson app_port "$app_port" '.data.tcpProxies[]? | select(.applicationPort == $app_port) | .id' \
+        | head -n 1
+    )"
+    proxy_domain="$(
+      printf '%s' "$response" \
+        | jq -r --argjson app_port "$app_port" '.data.tcpProxies[]? | select(.applicationPort == $app_port) | .domain' \
+        | head -n 1
+    )"
+    proxy_port="$(
+      printf '%s' "$response" \
+        | jq -r --argjson app_port "$app_port" '.data.tcpProxies[]? | select(.applicationPort == $app_port) | .proxyPort' \
+        | head -n 1
+    )"
+    proxy_status="$(
+      printf '%s' "$response" \
+        | jq -r --argjson app_port "$app_port" '.data.tcpProxies[]? | select(.applicationPort == $app_port) | .syncStatus' \
+        | head -n 1
+    )"
+
+    if [[ -n "$proxy_id" && "$proxy_status" == "ACTIVE" ]]; then
+      log "TCP proxy active for '$service_name': ${proxy_domain}:${proxy_port} -> ${app_port}"
+      return 0
+    fi
+
+    sleep 2
+  done
+
+  fail "TCP proxy for '$service_name' on app port $app_port did not reach ACTIVE in time."
+}
+
 ensure_public_domain() {
   local service_name="$1"
   local port="$2"
@@ -318,7 +497,12 @@ main() {
     'PORT=7900'
 
   ensure_public_domain "dashboard" "7080"
-  ensure_public_domain "dp-manager" "7943"
+  ensure_tcp_proxy "dp-manager" "$DP_MANAGER_TLS_APP_PORT"
+
+  # Dashboard applies DB migrations needed by dp-manager; force deterministic startup order.
+  redeploy_and_wait "dashboard"
+  redeploy_and_wait "dp-manager"
+
   ensure_prometheus_volume
 
   echo
