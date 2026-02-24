@@ -267,6 +267,18 @@ service_deploy_status() {
     | head -n 1
 }
 
+service_deploy_status_is_terminal() {
+  local status="$1"
+  case "$status" in
+    SUCCESS|CRASHED|FAILED|CANCELED|REMOVED)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 wait_for_service_success() {
   local service_name="$1"
   local timeout_seconds="${2:-900}"
@@ -298,6 +310,35 @@ wait_for_service_success() {
     elapsed="$((now_ts - start_ts))"
     if (( elapsed >= timeout_seconds )); then
       fail "Timed out waiting for service '$service_name' to reach SUCCESS (last status: $status)."
+    fi
+
+    sleep "$poll_interval_seconds"
+  done
+}
+
+wait_for_service_terminal_status() {
+  local service_name="$1"
+  local timeout_seconds="${2:-900}"
+  local poll_interval_seconds=5
+  local start_ts now_ts elapsed status
+
+  start_ts="$(date +%s)"
+
+  while true; do
+    status="$(service_deploy_status "$service_name")"
+    if [[ -z "$status" ]]; then
+      fail "Could not determine deployment status for service '$service_name'."
+    fi
+
+    if service_deploy_status_is_terminal "$status"; then
+      printf '%s' "$status"
+      return 0
+    fi
+
+    now_ts="$(date +%s)"
+    elapsed="$((now_ts - start_ts))"
+    if (( elapsed >= timeout_seconds )); then
+      fail "Timed out waiting for service '$service_name' terminal status (last status: $status)."
     fi
 
     sleep "$poll_interval_seconds"
@@ -418,6 +459,23 @@ ensure_tcp_proxy() {
   fail "TCP proxy for '$service_name' on app port $app_port did not reach ACTIVE in time."
 }
 
+reconcile_startup_order() {
+  local dp_status
+
+  # Mirror API7 quickstart order at service level:
+  # dashboard must be healthy first, then dp-manager.
+  wait_for_service_success "dashboard"
+
+  dp_status="$(wait_for_service_terminal_status "dp-manager")"
+  if [[ "$dp_status" == "SUCCESS" ]]; then
+    log "Service 'dp-manager' deployment is already SUCCESS."
+    return 0
+  fi
+
+  warn "Service 'dp-manager' is '$dp_status'. Triggering one recovery redeploy after dashboard readiness."
+  redeploy_and_wait "dp-manager"
+}
+
 ensure_public_domain() {
   local service_name="$1"
   local port="$2"
@@ -470,6 +528,7 @@ ensure_prometheus_volume() {
 }
 
 main() {
+  # Phase 1: project + service inventory
   ensure_project
   ensure_postgres
 
@@ -478,6 +537,7 @@ main() {
   ensure_service_from_repo "prometheus" "Dockerfile.prometheus"
   ensure_service_from_repo "jaeger" "Dockerfile.jaeger"
 
+  # Phase 2: cross-service wiring
   local database_ref
   printf -v database_ref \
     'DATABASE_DSN=postgres://${{%s.PGUSER}}:${{%s.PGPASSWORD}}@${{%s.PGHOST}}:${{%s.PGPORT}}/${{%s.PGDATABASE}}' \
@@ -496,12 +556,14 @@ main() {
     'JAEGER_COLLECTOR_ADDR=http://jaeger.railway.internal:4318' \
     'PORT=7900'
 
+  # Phase 3: exposure + runtime reconciliation
   ensure_public_domain "dashboard" "7080"
   ensure_tcp_proxy "dp-manager" "$DP_MANAGER_TLS_APP_PORT"
 
-  # Dashboard applies DB migrations needed by dp-manager; force deterministic startup order.
-  redeploy_and_wait "dashboard"
-  redeploy_and_wait "dp-manager"
+  # Dashboard applies DB migrations needed by dp-manager.
+  # Railway does not support docker-compose-style depends_on between services,
+  # so we enforce startup readiness explicitly.
+  reconcile_startup_order
 
   ensure_prometheus_volume
 

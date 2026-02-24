@@ -71,8 +71,22 @@ Idempotency behavior:
 - reapplies required variables on rerun
 - ensures dashboard public domain
 - ensures `dp-manager` Railway TCP proxy to app port `7943`
-- forces deterministic startup order (`dashboard` redeploy, then `dp-manager`) to avoid fresh-project migration race
+- enforces deterministic startup readiness (`dashboard` must be `SUCCESS` first, then `dp-manager`; auto-redeploys `dp-manager` only when needed)
 - ensures Prometheus volume mount at `/opt/bitnami/prometheus/data`
+
+## Startup Order (Quickstart Parity)
+Upstream API7 quickstart (`https://run.api7.ai/api7/quickstart`) and bundled compose (`api7-ee-v3.9.5/docker-compose.yaml`) imply this control-plane order:
+
+1. `prometheus` starts and becomes healthy.
+2. `api7-ee-dashboard` starts (compose `depends_on` prometheus healthy).
+3. `api7-ee-dp-manager` starts (compose `depends_on` dashboard healthy).
+4. quickstart script waits explicitly for:
+   - dashboard (`https://127.0.0.1:7443`)
+   - dp-manager (`http://127.0.0.1:7900`)
+   - developer-portal (`https://127.0.0.1:4321`)
+5. gateway is bootstrapped only after those waits pass.
+
+Railway has no cross-service `depends_on`, so this repo implements the same intent by waiting for dashboard readiness before reconciling dp-manager startup.
 
 ## Required variable wiring
 The script auto-resolves the PostgreSQL service reference. Default target is `Postgres`.
